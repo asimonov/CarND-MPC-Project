@@ -7,7 +7,7 @@ using CppAD::AD;
 
 // TODO: Set the timestep length and duration
 size_t N = 25;
-double dt = 0.05;
+double dt = 0.1;
 
 // This value assumes the model presented in the classroom is used.
 //
@@ -49,8 +49,8 @@ class FG_eval {
 
   typedef CPPAD_TESTVECTOR(AD<double>) ADvector;
 
-    // `fg` is a vector containing the cost and constraints.
-    // `vars` is a vector containing the variable values (state & actuators).
+  // `fg` is a vector containing the cost and constraints.
+  // `vars` is a vector containing the variable values (state & actuators).
   void operator()(ADvector& fg, const ADvector& vars) {
       // The cost is stored is the first element of `fg`.
       // Any additions to the cost should be added to `fg[0]`.
@@ -114,10 +114,9 @@ class FG_eval {
         AD<double> delta0 = vars[delta_start + i];
         AD<double> a0 = vars[a_start + i];
 
-        AD<double> f0 = coeffs[0] + coeffs[1] * x0;
+        AD<double> f0 = coeffs[0] + x0 * (coeffs[1] + x0 * (coeffs[2] + x0 * coeffs[3]));
         AD<double> psides0 = CppAD::atan(coeffs[1]);
 
-        // Here's `x` to get you started.
         // The idea here is to constraint this value to be 0.
         //
         // Recall the equations for the model:
@@ -127,14 +126,12 @@ class FG_eval {
         // v_[t+1] = v[t] + a[t] * dt
         // cte[t+1] = f(x[t]) - y[t] + v[t] * sin(epsi[t]) * dt
         // epsi[t+1] = psi[t] - psides[t] + v[t] * delta[t] / Lf * dt
-        fg[2 + x_start + i] = x1 - (x0 + v0 * CppAD::cos(psi0) * dt);
-        fg[2 + y_start + i] = y1 - (y0 + v0 * CppAD::sin(psi0) * dt);
-        fg[2 + psi_start + i] = psi1 - (psi0 + v0 * delta0 / Lf * dt);
-        fg[2 + v_start + i] = v1 - (v0 + a0 * dt);
-        fg[2 + cte_start + i] =
-                cte1 - ((f0 - y0) + (v0 * CppAD::sin(epsi0) * dt));
-        fg[2 + epsi_start + i] =
-                epsi1 - ((psi0 - psides0) + v0 * delta0 / Lf * dt);
+        fg[2 + x_start + i]    = x1    - (x0 + v0 * CppAD::cos(psi0) * dt);
+        fg[2 + y_start + i]    = y1    - (y0 + v0 * CppAD::sin(psi0) * dt);
+        fg[2 + psi_start + i]  = psi1  - (psi0 + v0 * delta0 / Lf * dt);
+        fg[2 + v_start + i]    = v1    - (v0 + a0 * dt);
+        fg[2 + cte_start + i]  = cte1  - ((f0 - y0) + (v0 * CppAD::sin(epsi0) * dt));
+        fg[2 + epsi_start + i] = epsi1 - ((psi0 - psides0) + v0 * delta0 / Lf * dt);
       }
   }
 };
@@ -184,22 +181,20 @@ vector<double> MPC::Solve(Eigen::VectorXd x0, Eigen::VectorXd coeffs) {
   // to the max negative and positive values.
   for (int i = 0; i < delta_start; i++) {
     vars_lowerbound[i] = -1.0e19;
-    vars_upperbound[i] = 1.0e19;
+    vars_upperbound[i] =  1.0e19;
   }
 
-  // The upper and lower limits of delta are set to -25 and 25
-  // degrees (values in radians).
-  // NOTE: Feel free to change this to something else.
+  // The upper and lower limits of delta/steering angle are set to -1 and 1.
   for (int i = delta_start; i < a_start; i++) {
-    vars_lowerbound[i] = -0.436332;
-    vars_upperbound[i] = 0.436332;
+    vars_lowerbound[i] = -1.0;
+    vars_upperbound[i] =  1.0;
   }
 
   // Acceleration/decceleration upper and lower limits.
   // NOTE: Feel free to change this to something else.
   for (int i = a_start; i < n_vars; i++) {
     vars_lowerbound[i] = -1.0;
-    vars_upperbound[i] = 1.0;
+    vars_upperbound[i] =  1.0;
   }
 
 
@@ -254,10 +249,12 @@ vector<double> MPC::Solve(Eigen::VectorXd x0, Eigen::VectorXd coeffs) {
   // Check some of the solution values
   bool ok = true;
   ok &= solution.status == CppAD::ipopt::solve_result<Dvector>::success;
+  assert(ok);
 
   // Cost
   auto cost = solution.obj_value;
   std::cout << "Cost " << cost << std::endl;
+
 
   // TODO: Return the first actuator values. The variables can be accessed with
   // `solution.x[i]`.

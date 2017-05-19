@@ -118,7 +118,7 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws, char *data, size_t le
         x0[1] = 0.0; // y
         x0[2] = 0.0; // psi -- car points along x axis
         x0[3] = v; // speed
-        x0[4] = -polyeval(coeff, 0.0); // cross track error is simply y(0.0) as car is in the center of coordinates
+        x0[4] = polyeval(coeff, 0.0); // cross track error is simply y(0.0) as car is in the center of coordinates
         x0[5] = atan(coeff[1]); // heading error. this is simply angle of f(x) wrt x axis at zero. arctan(f'(0)). f=ax^3+bx^2+cx+d. f'(0)=c
 
         double steer_value = -0.02;
