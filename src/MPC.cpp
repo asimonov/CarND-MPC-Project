@@ -2,8 +2,12 @@
 #include <cppad/cppad.hpp>
 #include <cppad/ipopt/solve.hpp>
 #include "Eigen-3.3/Eigen/Core"
+#include "matplotlibcpp.h"
 
 using CppAD::AD;
+
+namespace plt = matplotlibcpp;
+
 
 // TODO: Set the timestep length and duration
 size_t N = 25;
@@ -22,10 +26,10 @@ double dt = 0.1;
 const double Lf = 2.67;
 
 // Both the reference cross track and orientation errors are 0.
-// The reference velocity is set to 40 mph.
 double ref_cte = 0;
 double ref_epsi = 0;
-double ref_v = 40;
+// The reference velocity is set to 15 m/s. times 2 to get mph
+double ref_v = 30;
 
 // The solver takes all the state variables and actuator
 // variables in a singular vector. Thus, we should to establish
@@ -63,12 +67,14 @@ class FG_eval {
         fg[0] += CppAD::pow(vars[v_start + i] - ref_v, 2);
       }
 
+      double steering_angle_dampen_factor = 500;
       // Minimize the use of actuators.
       for (int i = 0; i < N - 1; i++) {
-        fg[0] += CppAD::pow(vars[delta_start + i], 2);
+        fg[0] += steering_angle_dampen_factor * CppAD::pow(vars[delta_start + i], 2);
         fg[0] += CppAD::pow(vars[a_start + i], 2);
       }
 
+      double steering_step_dampen_factor = 500;
       // Minimize the value gap between sequential actuations.
       for (int i = 0; i < N - 2; i++) {
         fg[0] += CppAD::pow(vars[delta_start + i + 1] - vars[delta_start + i], 2);
@@ -114,8 +120,10 @@ class FG_eval {
         AD<double> delta0 = vars[delta_start + i];
         AD<double> a0 = vars[a_start + i];
 
-        AD<double> f0 = coeffs[0] + x0 * (coeffs[1] + x0 * (coeffs[2] + x0 * coeffs[3]));
-        AD<double> psides0 = CppAD::atan(coeffs[1]);
+        //AD<double> f0 = coeffs[0] + x0 * (coeffs[1] + x0 * (coeffs[2] + x0 * coeffs[3]));
+        //AD<double> psides0 = CppAD::atan(coeffs[1] + x0 * (2 * coeffs[2] + x0 * 3 * coeffs[3]));
+        AD<double> f0 = coeffs[0] + x0 * (coeffs[1] + x0 * (coeffs[2] ));
+        AD<double> psides0 = CppAD::atan(coeffs[1] + x0 * (2 * coeffs[2] ));
 
         // The idea here is to constraint this value to be 0.
         //
@@ -128,10 +136,10 @@ class FG_eval {
         // epsi[t+1] = psi[t] - psides[t] + v[t] * delta[t] / Lf * dt
         fg[2 + x_start + i]    = x1    - (x0 + v0 * CppAD::cos(psi0) * dt);
         fg[2 + y_start + i]    = y1    - (y0 + v0 * CppAD::sin(psi0) * dt);
-        fg[2 + psi_start + i]  = psi1  - (psi0 + v0 * delta0 / Lf * dt);
+        fg[2 + psi_start + i]  = psi1  - (psi0 - v0 * delta0 / Lf * dt); // plus here as suspect delta is positive to turn left
         fg[2 + v_start + i]    = v1    - (v0 + a0 * dt);
         fg[2 + cte_start + i]  = cte1  - ((f0 - y0) + (v0 * CppAD::sin(epsi0) * dt));
-        fg[2 + epsi_start + i] = epsi1 - ((psi0 - psides0) + v0 * delta0 / Lf * dt);
+        fg[2 + epsi_start + i] = epsi1 - (psi0 - psides0 - v0 * delta0 / Lf * dt); // again plus as delta is different sign
       }
   }
 };
@@ -142,7 +150,7 @@ class FG_eval {
 MPC::MPC() {}
 MPC::~MPC() {}
 
-vector<double> MPC::Solve(Eigen::VectorXd x0, Eigen::VectorXd coeffs) {
+vector<double> MPC::Solve(Eigen::VectorXd x0, Eigen::VectorXd coeffs, vector<double> &x_trajectory, vector<double> &y_trajectory) {
   size_t i;
   typedef CPPAD_TESTVECTOR(double) Dvector;
 
@@ -152,12 +160,12 @@ vector<double> MPC::Solve(Eigen::VectorXd x0, Eigen::VectorXd coeffs) {
   // Number of constraints
   size_t n_constraints = N * 6;
 
-  double x = x0[0];
-  double y = x0[1];
-  double psi = x0[2];
-  double v = x0[3];
-  double cte = x0[4];
-  double epsi = x0[5];
+  double x = x0[0]; // meters
+  double y = x0[1]; // meters
+  double psi = x0[2]; // rad
+  double v = x0[3]; // m/s
+  double cte = x0[4]; // m
+  double epsi = x0[5]; // rad
 
   // Initial value of the independent variables.
   // Should be 0 except for the initial values.
@@ -186,15 +194,15 @@ vector<double> MPC::Solve(Eigen::VectorXd x0, Eigen::VectorXd coeffs) {
 
   // The upper and lower limits of delta/steering angle are set to -1 and 1.
   for (int i = delta_start; i < a_start; i++) {
-    vars_lowerbound[i] = -1.0;
-    vars_upperbound[i] =  1.0;
+    vars_lowerbound[i] = -25 * M_PI / 180; // deg2rad(-25)
+    vars_upperbound[i] =  25 * M_PI / 180;
   }
 
   // Acceleration/decceleration upper and lower limits.
   // NOTE: Feel free to change this to something else.
   for (int i = a_start; i < n_vars; i++) {
-    vars_lowerbound[i] = -1.0;
-    vars_upperbound[i] =  1.0;
+    vars_lowerbound[i] = -5.0; // assume throttle of 1 is 5 m/s2 acceleration
+    vars_upperbound[i] =  5.0;
   }
 
 
@@ -236,7 +244,7 @@ vector<double> MPC::Solve(Eigen::VectorXd x0, Eigen::VectorXd coeffs) {
   options += "Sparse  true        reverse\n";
   // NOTE: Currently the solver has a maximum time limit of 0.5 seconds.
   // Change this as you see fit.
-  options += "Numeric max_cpu_time          0.5\n";
+  options += "Numeric max_cpu_time          0.2\n";
 
   // place to return solution
   CppAD::ipopt::solve_result<Dvector> solution;
@@ -249,11 +257,26 @@ vector<double> MPC::Solve(Eigen::VectorXd x0, Eigen::VectorXd coeffs) {
   // Check some of the solution values
   bool ok = true;
   ok &= solution.status == CppAD::ipopt::solve_result<Dvector>::success;
-  assert(ok);
+
+  std::cout << "solution state: " << ok << std::endl;
+  //assert(ok);
 
   // Cost
   auto cost = solution.obj_value;
   std::cout << "Cost " << cost << std::endl;
+
+  x_trajectory.resize(N);
+  y_trajectory.resize(N);
+
+  for (int i=0; i<N; i++)
+  {
+    x_trajectory[i] = solution.x[x_start + i];
+    y_trajectory[i] = solution.x[y_start + i];
+  }
+
+
+
+
 
 
   // TODO: Return the first actuator values. The variables can be accessed with
