@@ -75,6 +75,10 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws, char *data, size_t le
   // The 4 signifies a websocket message
   // The 2 signifies a websocket event
   string sdata = string(data).substr(0, length);
+  static time_t prev_telemetery_time = 0;
+  static double prev_steering_angle = 0.0;
+  static double prev_throttle = 0.0;
+  const double default_latency = 0.1;
 
 //  cout << sdata << endl;
   if (sdata.size() > 2 && sdata[0] == '4' && sdata[1] == '2') {
@@ -92,7 +96,37 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws, char *data, size_t le
         double psi = j[1]["psi"];
         double v = j[1]["speed"];
 
-        cout << "IN  time, sec: " << ((clock() - starttime) / double(CLOCKS_PER_SEC)) << " px="<<px<<" py="<<py<<" v="<<v<<" psi="<<psi << endl;
+        cout << "IN: " << ((clock() - starttime) / double(CLOCKS_PER_SEC)) << " px="<<px<<" py="<<py<<" v="<<v<<" psi="<<psi << endl;
+
+        // adjust start state for latency
+        double latency = prev_telemetery_time==0 ? default_latency : ((clock() - prev_telemetery_time) / double(CLOCKS_PER_SEC)) ;
+        if (true and fabs(prev_steering_angle) > 0.001) { // lame approximation
+          latency = 0.1;
+          px = px + v * (1609. / 3600.) * cos(psi) * latency;
+          py = py + v * (1609. / 3600.) * sin(psi) * latency;
+          for (int i = 0; i < ptsx.size(); i++) {
+            ptsx[i] = ptsx[i] + v * (1609. / 3600.) * cos(psi) * latency;
+            ptsy[i] = ptsy[i] + v * (1609. / 3600.) * sin(psi) * latency;
+          }
+          const double Lf = 2.67;
+          psi = psi - v * deg2rad(prev_steering_angle * 25.) / Lf * latency;
+          v = v + prev_throttle * 5.0 * latency;
+        }
+        else if (true and v>0.0001) { // bicycle model equations from EKF lectures
+          latency = 0.1;
+          const double Lf = 2.67;
+          double psidot = - v * deg2rad(prev_steering_angle * 25.) / Lf;
+          const double conv_factor = (1609. / 3600.);
+          px = px + (v / psidot) * conv_factor * (sin(psi + psidot * latency) - sin(psi)) + 0.5 * latency * latency * cos(psi) * prev_throttle * 5.0;
+          py = py + (v / psidot) * conv_factor * (-cos(psi + psidot * latency) + cos(psi)) + 0.5 * latency * latency * sin(psi) * prev_throttle * 5.0;
+          for (int i = 0; i < ptsx.size(); i++) {
+            ptsx[i] = ptsx[i] + (v / psidot) * conv_factor * (sin(psi + psidot * latency) - sin(psi)) + 0.5 * latency * latency * cos(psi) * prev_throttle * 5.0;
+            ptsy[i] = ptsy[i] + (v / psidot) * conv_factor * (-cos(psi + psidot * latency) + cos(psi)) + 0.5 * latency * latency * sin(psi) * prev_throttle * 5.0;
+          }
+          psi = psi + psidot * latency;
+          v = v + prev_throttle * 5.0 * latency;
+          cout << px << " " << py << " " << psi << " " << v << endl;
+        }
 
         // convert waypoints to car coordinates
         Eigen::VectorXd ptsx_car(ptsx.size());
@@ -109,7 +143,7 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws, char *data, size_t le
         }
 
         // fit polynomial
-        int order = 2;
+        int order = 3;
         Eigen::VectorXd coeff = polyfit(ptsx_car, ptsy_car, order);
 
         /*
@@ -134,10 +168,16 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws, char *data, size_t le
         vector<double> mpc_x_vals;
         vector<double> mpc_y_vals;
 
-        vector<double> solution = mpc.Solve(x0, coeff, mpc_x_vals, mpc_y_vals);
+        bool status = false;
+        vector<double> solution = mpc.Solve(x0, coeff, mpc_x_vals, mpc_y_vals, status);
 
-        steer_value = solution[0] / deg2rad(25); // already in radians
-        throttle_value = solution[1] / 5.0;
+        if (status) {
+          steer_value = solution[0] / deg2rad(25); // already in radians
+          throttle_value = solution[1] / 5.0;
+        } else {
+          steer_value = prev_steering_angle;
+          throttle_value = prev_throttle;
+        }
 
         json msgJson;
         msgJson["steering_angle"] = steer_value;
@@ -154,8 +194,12 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws, char *data, size_t le
         msgJson["next_y"] = v_ptsy_car;
 
         auto msg = "42[\"steer\"," + msgJson.dump() + "]";
-        std::cout << msg << std::endl;
-//        cout << "SOL time, sec: " << ((clock() - starttime) / double(CLOCKS_PER_SEC)) << endl;
+//        std::cout << msg << std::endl;
+
+        prev_telemetery_time = clock();
+        prev_steering_angle = steer_value;
+        prev_throttle = throttle_value;
+
         // Latency
         // The purpose is to mimic real driving conditions where
         // the car does actuate the commands instantly.
@@ -165,9 +209,13 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws, char *data, size_t le
         //
         // NOTE: REMEMBER TO SET THIS TO 100 MILLISECONDS BEFORE
         // SUBMITTING.
+        cout << "pre-latency: " << ((clock() - starttime) / double(CLOCKS_PER_SEC)) << endl;
+        auto start = chrono::high_resolution_clock::now();
+
         this_thread::sleep_for(chrono::milliseconds(100));
 
-        cout << "OUT time, sec: " << ((clock() - starttime) / double(CLOCKS_PER_SEC)) << " st="<<steer_value<<" thrt="<<throttle_value  << endl;
+        cout << chrono::duration_cast<chrono::milliseconds>(chrono::high_resolution_clock::now() - start).count() << "ms\n";
+        cout << "OUT: " << ((clock() - starttime) / double(CLOCKS_PER_SEC)) << " st="<<steer_value<<" thrt="<<throttle_value  << endl;
 
         ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
       }

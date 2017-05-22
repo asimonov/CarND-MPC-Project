@@ -10,7 +10,7 @@ namespace plt = matplotlibcpp;
 
 
 // TODO: Set the timestep length and duration
-size_t N = 25;
+size_t N = 10;
 double dt = 0.1;
 
 // This value assumes the model presented in the classroom is used.
@@ -29,7 +29,7 @@ const double Lf = 2.67;
 double ref_cte = 0;
 double ref_epsi = 0;
 // The reference velocity is set to 15 m/s. times 2 to get mph
-double ref_v = 30;
+double ref_v = 50;
 
 // The solver takes all the state variables and actuator
 // variables in a singular vector. Thus, we should to establish
@@ -60,24 +60,25 @@ class FG_eval {
       // Any additions to the cost should be added to `fg[0]`.
       fg[0] = 0;
 
+      AD<double> cte_factor = 1;
       // The part of the cost based on the reference state.
       for (int i = 0; i < N; i++) {
-        fg[0] += CppAD::pow(vars[cte_start + i] - ref_cte, 2);
+        fg[0] += cte_factor * CppAD::pow(vars[cte_start + i] - ref_cte, 2);
         fg[0] += CppAD::pow(vars[epsi_start + i] - ref_epsi, 2);
         fg[0] += CppAD::pow(vars[v_start + i] - ref_v, 2);
       }
 
-      double steering_angle_dampen_factor = 500;
+      double steering_angle_dampen_factor = 4000;
       // Minimize the use of actuators.
       for (int i = 0; i < N - 1; i++) {
         fg[0] += steering_angle_dampen_factor * CppAD::pow(vars[delta_start + i], 2);
         fg[0] += CppAD::pow(vars[a_start + i], 2);
       }
 
-      double steering_step_dampen_factor = 500;
+      double steering_step_dampen_factor = 1;
       // Minimize the value gap between sequential actuations.
       for (int i = 0; i < N - 2; i++) {
-        fg[0] += CppAD::pow(vars[delta_start + i + 1] - vars[delta_start + i], 2);
+        fg[0] += steering_step_dampen_factor * CppAD::pow(vars[delta_start + i + 1] - vars[delta_start + i], 2);
         fg[0] += CppAD::pow(vars[a_start + i + 1] - vars[a_start + i], 2);
       }
 
@@ -120,10 +121,10 @@ class FG_eval {
         AD<double> delta0 = vars[delta_start + i];
         AD<double> a0 = vars[a_start + i];
 
-        //AD<double> f0 = coeffs[0] + x0 * (coeffs[1] + x0 * (coeffs[2] + x0 * coeffs[3]));
-        //AD<double> psides0 = CppAD::atan(coeffs[1] + x0 * (2 * coeffs[2] + x0 * 3 * coeffs[3]));
-        AD<double> f0 = coeffs[0] + x0 * (coeffs[1] + x0 * (coeffs[2] ));
-        AD<double> psides0 = CppAD::atan(coeffs[1] + x0 * (2 * coeffs[2] ));
+        AD<double> f0 = coeffs[0] + x0 * (coeffs[1] + x0 * (coeffs[2] + x0 * coeffs[3]));
+        AD<double> psides0 = CppAD::atan(coeffs[1] + x0 * (2 * coeffs[2] + x0 * 3 * coeffs[3]));
+        //AD<double> f0 = coeffs[0] + x0 * (coeffs[1] + x0 * (coeffs[2] ));
+        //AD<double> psides0 = CppAD::atan(coeffs[1] + x0 * (2 * coeffs[2] ));
 
         // The idea here is to constraint this value to be 0.
         //
@@ -150,7 +151,7 @@ class FG_eval {
 MPC::MPC() {}
 MPC::~MPC() {}
 
-vector<double> MPC::Solve(Eigen::VectorXd x0, Eigen::VectorXd coeffs, vector<double> &x_trajectory, vector<double> &y_trajectory) {
+vector<double> MPC::Solve(Eigen::VectorXd x0, Eigen::VectorXd coeffs, vector<double> &x_trajectory, vector<double> &y_trajectory, bool &status) {
   size_t i;
   typedef CPPAD_TESTVECTOR(double) Dvector;
 
@@ -244,7 +245,7 @@ vector<double> MPC::Solve(Eigen::VectorXd x0, Eigen::VectorXd coeffs, vector<dou
   options += "Sparse  true        reverse\n";
   // NOTE: Currently the solver has a maximum time limit of 0.5 seconds.
   // Change this as you see fit.
-  options += "Numeric max_cpu_time          0.2\n";
+  options += "Numeric max_cpu_time          0.05\n";
 
   // place to return solution
   CppAD::ipopt::solve_result<Dvector> solution;
@@ -255,15 +256,15 @@ vector<double> MPC::Solve(Eigen::VectorXd x0, Eigen::VectorXd coeffs, vector<dou
       constraints_upperbound, fg_eval, solution);
 
   // Check some of the solution values
-  bool ok = true;
-  ok &= solution.status == CppAD::ipopt::solve_result<Dvector>::success;
+  status = (solution.status == CppAD::ipopt::solve_result<Dvector>::success);
 
-  std::cout << "solution state: " << ok << std::endl;
+  if (!status)
+    std::cout << "FAIL" << std::endl;
   //assert(ok);
 
   // Cost
   auto cost = solution.obj_value;
-  std::cout << "Cost " << cost << std::endl;
+//  std::cout << "Cost " << cost << std::endl;
 
   x_trajectory.resize(N);
   y_trajectory.resize(N);
