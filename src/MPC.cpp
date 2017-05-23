@@ -29,7 +29,7 @@ const double Lf = 2.67;
 double ref_cte = 0;
 double ref_epsi = 0;
 // The reference velocity is set to 15 m/s. times 2 to get mph
-double ref_v = 50;
+double ref_v = 40;
 
 // The solver takes all the state variables and actuator
 // variables in a singular vector. Thus, we should to establish

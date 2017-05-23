@@ -10,6 +10,7 @@
 #include "Eigen-3.3/Eigen/QR"
 #include "MPC.h"
 #include "json.hpp"
+#include "HiResTimer.h"
 
 // for convenience
 using json = nlohmann::json;
@@ -67,15 +68,23 @@ Eigen::VectorXd polyfit(Eigen::VectorXd xvals, Eigen::VectorXd yvals,
   return result;
 }
 
-using namespace std::placeholders;
+using namespace std::placeholders; // for _1, _2 etc
 
-static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length, uWS::OpCode opCode, MPC& mpc, int starttime)
+
+static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws,
+                           char *data,
+                           size_t length,
+                           uWS::OpCode opCode,
+                           MPC& mpc,
+                           HiResTimer &hrt)
 {
   // "42" at the start of the message means there's a websocket message event.
   // The 4 signifies a websocket message
   // The 2 signifies a websocket event
   string sdata = string(data).substr(0, length);
-  static time_t prev_telemetery_time = 0;
+
+  static HiResTimer prev_telemetery_hrt;
+
   static double prev_steering_angle = 0.0;
   static double prev_throttle = 0.0;
   const double default_latency = 0.1;
@@ -96,35 +105,38 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws, char *data, size_t le
         double psi = j[1]["psi"];
         double v = j[1]["speed"];
 
-        cout << "IN: " << ((clock() - starttime) / double(CLOCKS_PER_SEC)) << " px="<<px<<" py="<<py<<" v="<<v<<" psi="<<psi << endl;
+        cout << prev_telemetery_hrt.GetElapsedSecs() << " secs latency since controls sent "<< endl;
+        cout << "IN: " << hrt.GetElapsedSecs() << " px="<<px<<" py="<<py<<" v="<<v<<" psi="<<psi << endl;
+
+        HiResTimer calc_hrt;
 
         // adjust start state for latency
-        double latency = prev_telemetery_time==0 ? default_latency : ((clock() - prev_telemetery_time) / double(CLOCKS_PER_SEC)) ;
-        if (true and fabs(prev_steering_angle) > 0.001) { // lame approximation
-          latency = 0.1;
-          px = px + v * (1609. / 3600.) * cos(psi) * latency;
-          py = py + v * (1609. / 3600.) * sin(psi) * latency;
-          for (int i = 0; i < ptsx.size(); i++) {
-            ptsx[i] = ptsx[i] + v * (1609. / 3600.) * cos(psi) * latency;
-            ptsy[i] = ptsy[i] + v * (1609. / 3600.) * sin(psi) * latency;
-          }
-          const double Lf = 2.67;
-          psi = psi - v * deg2rad(prev_steering_angle * 25.) / Lf * latency;
-          v = v + prev_throttle * 5.0 * latency;
+        double latency = 0.12 ;
+        bool adjust_for_latency = true;
+        const double Lf = 2.67;
+        const double v_conv = v * (1609. / 3600.);
+
+        if (adjust_for_latency and fabs(prev_steering_angle) < 0.0001) { // lame approximation
+          px = px + v_conv * cos(psi) * latency;
+          py = py + v_conv * sin(psi) * latency;
+//          for (int i = 0; i < ptsx.size(); i++) {
+//            ptsx[i] = ptsx[i] + v * (1609. / 3600.) * cos(psi) * latency;
+//            ptsy[i] = ptsy[i] + v * (1609. / 3600.) * sin(psi) * latency;
+//          }
+          psi = psi - v_conv * deg2rad(prev_steering_angle * 25.) / Lf * latency;
+          //v = v + prev_throttle * 5.0 * latency;
         }
-        else if (true and v>0.0001) { // bicycle model equations from EKF lectures
-          latency = 0.1;
-          const double Lf = 2.67;
-          double psidot = - v * deg2rad(prev_steering_angle * 25.) / Lf;
-          const double conv_factor = (1609. / 3600.);
-          px = px + (v / psidot) * conv_factor * (sin(psi + psidot * latency) - sin(psi)) + 0.5 * latency * latency * cos(psi) * prev_throttle * 5.0;
-          py = py + (v / psidot) * conv_factor * (-cos(psi + psidot * latency) + cos(psi)) + 0.5 * latency * latency * sin(psi) * prev_throttle * 5.0;
-          for (int i = 0; i < ptsx.size(); i++) {
-            ptsx[i] = ptsx[i] + (v / psidot) * conv_factor * (sin(psi + psidot * latency) - sin(psi)) + 0.5 * latency * latency * cos(psi) * prev_throttle * 5.0;
-            ptsy[i] = ptsy[i] + (v / psidot) * conv_factor * (-cos(psi + psidot * latency) + cos(psi)) + 0.5 * latency * latency * sin(psi) * prev_throttle * 5.0;
-          }
-          psi = psi + psidot * latency;
-          v = v + prev_throttle * 5.0 * latency;
+        else if (adjust_for_latency and v>0.0001) { // bicycle model equations from EKF lectures
+          double psidot = - v_conv * deg2rad(prev_steering_angle * 25.) / Lf;
+          double psi_new = psi + psidot * latency;
+          px = px + (v_conv / psidot) * ( sin(psi_new) - sin(psi));// + 0.5 * latency * latency * cos(psi) * prev_throttle * 5.0;
+          py = py + (v_conv / psidot) * (-cos(psi_new) + cos(psi));// + 0.5 * latency * latency * sin(psi) * prev_throttle * 5.0;
+//          for (int i = 0; i < ptsx.size(); i++) {
+//            ptsx[i] = ptsx[i] + (v / psidot) * conv_factor * (sin(psi + psidot * latency) - sin(psi)) + 0.5 * latency * latency * cos(psi) * prev_throttle * 5.0;
+//            ptsy[i] = ptsy[i] + (v / psidot) * conv_factor * (-cos(psi + psidot * latency) + cos(psi)) + 0.5 * latency * latency * sin(psi) * prev_throttle * 5.0;
+//          }
+          psi = psi_new;
+//          v = v + prev_throttle * 5.0 * latency;
           cout << px << " " << py << " " << psi << " " << v << endl;
         }
 
@@ -171,6 +183,8 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws, char *data, size_t le
         bool status = false;
         vector<double> solution = mpc.Solve(x0, coeff, mpc_x_vals, mpc_y_vals, status);
 
+        cout << calc_hrt.GetElapsedSecs() << " secs calculation "<< endl;
+
         if (status) {
           steer_value = solution[0] / deg2rad(25); // already in radians
           throttle_value = solution[1] / 5.0;
@@ -196,7 +210,6 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws, char *data, size_t le
         auto msg = "42[\"steer\"," + msgJson.dump() + "]";
 //        std::cout << msg << std::endl;
 
-        prev_telemetery_time = clock();
         prev_steering_angle = steer_value;
         prev_throttle = throttle_value;
 
@@ -209,13 +222,14 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws, char *data, size_t le
         //
         // NOTE: REMEMBER TO SET THIS TO 100 MILLISECONDS BEFORE
         // SUBMITTING.
-        cout << "pre-latency: " << ((clock() - starttime) / double(CLOCKS_PER_SEC)) << endl;
-        auto start = chrono::high_resolution_clock::now();
+        HiResTimer sleep_hrt;
 
         this_thread::sleep_for(chrono::milliseconds(100));
 
-        cout << chrono::duration_cast<chrono::milliseconds>(chrono::high_resolution_clock::now() - start).count() << "ms\n";
-        cout << "OUT: " << ((clock() - starttime) / double(CLOCKS_PER_SEC)) << " st="<<steer_value<<" thrt="<<throttle_value  << endl;
+        cout << sleep_hrt.GetElapsedSecs() << " secs slept\n";
+        cout << "OUT: " << hrt.GetElapsedSecs() << " st="<<steer_value<<" thrt="<<throttle_value  << endl;
+
+        prev_telemetery_hrt.Reset(); // start measuring time from last telemetery
 
         ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
       }
@@ -231,18 +245,12 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws, char *data, size_t le
 int main() {
   uWS::Hub h;
 
-  // MPC is initialized here!
-  MPC mpc;
-  // Start timer.
-  int starttime = clock();
+  MPC mpc; // Model Predictive Controller
+  HiResTimer hrt; // High Resolution Timer to measure latencies
 
-//  h.onMessage([&mpc](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
-//                     uWS::OpCode opCode) {});
-  h.onMessage(std::bind(MessageHandler, _1, _2, _3, _4, mpc, starttime));
+  h.onMessage(std::bind(MessageHandler, _1, _2, _3, _4, mpc, hrt));
 
-  // We don't need this since we're not using HTTP but if it's removed the
-  // program
-  // doesn't compile :-(
+  // We don't need this since we're not using HTTP but if it's removed the program doesn't compile :-(
   h.onHttpRequest([](uWS::HttpResponse *res, uWS::HttpRequest req, char *data,
                      size_t, size_t) {
     const std::string s = "<h1>Hello world!</h1>";
