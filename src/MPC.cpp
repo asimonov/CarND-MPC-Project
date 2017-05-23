@@ -10,7 +10,7 @@ namespace plt = matplotlibcpp;
 
 
 // TODO: Set the timestep length and duration
-size_t N = 10;
+size_t N = 12;
 double dt = 0.1;
 
 // This value assumes the model presented in the classroom is used.
@@ -68,7 +68,7 @@ class FG_eval {
         fg[0] += CppAD::pow(vars[v_start + i] - ref_v, 2);
       }
 
-      double steering_angle_dampen_factor = 4000;
+      double steering_angle_dampen_factor = 10000;
       // Minimize the use of actuators.
       for (int i = 0; i < N - 1; i++) {
         fg[0] += steering_angle_dampen_factor * CppAD::pow(vars[delta_start + i], 2);
