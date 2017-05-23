@@ -184,15 +184,17 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws,
 
         double curvature = (fabs(coeff[2]) > 0.0001) ? pow(1.0+pow(coeff[1], 2), 1.5) / fabs(2.*coeff[2]) : 10000. ;
         double v_ref = 100; // in mph. MPC will convert to m/s2
-        if (v < 10.)
-          v_ref = 100;
+        if (v < 40.)
+          v_ref = 150;
         else
-          if (curvature < 200)
+          if (curvature < 70)
             v_ref = 80;
-          else if (curvature < 100)
-            v_ref = 60;
-          else if (curvature < 50)
-            v_ref = 30;
+//          else if (curvature < 80)
+//            v_ref = 80;
+//          else if (curvature < 100)
+//            v_ref = 100;
+          else
+            v_ref = 150;
         cout << "curvature: " << curvature << " v: " << v << " ref_v: " << v_ref << endl;
 
         vector<double> solution = mpc.Solve(x0, coeff, v_ref, mpc_x_vals, mpc_y_vals, status);

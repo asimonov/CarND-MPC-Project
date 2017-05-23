@@ -64,7 +64,7 @@ class FG_eval {
       fg[0] = 0;
 
       AD<double> cte_factor = 1.5;
-      AD<double> speed_factor = 10;
+      AD<double> speed_factor = 1;
       // The part of the cost based on the reference state.
       for (int i = 0; i < N; i++) {
         fg[0] += cte_factor * CppAD::pow(vars[cte_start + i] - ref_cte, 2);
@@ -72,7 +72,7 @@ class FG_eval {
         fg[0] += speed_factor * CppAD::pow(vars[v_start + i] - ref_v, 2);
       }
 
-      double steering_angle_dampen_factor = 10000;
+      double steering_angle_dampen_factor = 5000;
       // Minimize the use of actuators.
       for (int i = 0; i < N - 1; i++) {
         fg[0] += steering_angle_dampen_factor * CppAD::pow(vars[delta_start + i], 2);
