@@ -25,11 +25,6 @@ double dt = 0.1;
 // This is the length from front to CoG that has a similar radius.
 const double Lf = 2.67;
 
-// Both the reference cross track and orientation errors are 0.
-double ref_cte = 0;
-double ref_epsi = 0;
-// The reference velocity is set to 15 m/s. times 2 to get mph
-double ref_v = 40;
 
 // The solver takes all the state variables and actuator
 // variables in a singular vector. Thus, we should to establish
@@ -46,10 +41,18 @@ size_t a_start = delta_start + N - 1;
 
 
 class FG_eval {
+// Both the reference cross track and orientation errors are 0.
+    double ref_cte = 0;
+    double ref_epsi = 0;
+    // Fitted polynomial coefficients
+    Eigen::VectorXd coeffs;
+    // The reference velocity in m/s
+    double ref_v = 25;
  public:
-  // Fitted polynomial coefficients
-  Eigen::VectorXd coeffs;
-  FG_eval(Eigen::VectorXd coeffs) { this->coeffs = coeffs; }
+  FG_eval(Eigen::VectorXd coeffs, double v_ref) {
+    this->coeffs = coeffs;
+    this->ref_v = v_ref * (1609./3600.);
+  }
 
   typedef CPPAD_TESTVECTOR(AD<double>) ADvector;
 
@@ -60,12 +63,13 @@ class FG_eval {
       // Any additions to the cost should be added to `fg[0]`.
       fg[0] = 0;
 
-      AD<double> cte_factor = 1;
+      AD<double> cte_factor = 1.5;
+      AD<double> speed_factor = 10;
       // The part of the cost based on the reference state.
       for (int i = 0; i < N; i++) {
         fg[0] += cte_factor * CppAD::pow(vars[cte_start + i] - ref_cte, 2);
         fg[0] += CppAD::pow(vars[epsi_start + i] - ref_epsi, 2);
-        fg[0] += CppAD::pow(vars[v_start + i] - ref_v, 2);
+        fg[0] += speed_factor * CppAD::pow(vars[v_start + i] - ref_v, 2);
       }
 
       double steering_angle_dampen_factor = 10000;
@@ -121,10 +125,10 @@ class FG_eval {
         AD<double> delta0 = vars[delta_start + i];
         AD<double> a0 = vars[a_start + i];
 
-        AD<double> f0 = coeffs[0] + x0 * (coeffs[1] + x0 * (coeffs[2] + x0 * coeffs[3]));
-        AD<double> psides0 = CppAD::atan(coeffs[1] + x0 * (2 * coeffs[2] + x0 * 3 * coeffs[3]));
-        //AD<double> f0 = coeffs[0] + x0 * (coeffs[1] + x0 * (coeffs[2] ));
-        //AD<double> psides0 = CppAD::atan(coeffs[1] + x0 * (2 * coeffs[2] ));
+        //AD<double> f0 = coeffs[0] + x0 * (coeffs[1] + x0 * (coeffs[2] + x0 * coeffs[3]));
+        //AD<double> psides0 = CppAD::atan(coeffs[1] + x0 * (2 * coeffs[2] + x0 * 3 * coeffs[3]));
+        AD<double> f0 = coeffs[0] + x0 * (coeffs[1] + x0 * (coeffs[2] ));
+        AD<double> psides0 = CppAD::atan(coeffs[1] + x0 * (2 * coeffs[2] ));
 
         // The idea here is to constraint this value to be 0.
         //
@@ -151,7 +155,7 @@ class FG_eval {
 MPC::MPC() {}
 MPC::~MPC() {}
 
-vector<double> MPC::Solve(Eigen::VectorXd x0, Eigen::VectorXd coeffs, vector<double> &x_trajectory, vector<double> &y_trajectory, bool &status) {
+vector<double> MPC::Solve(Eigen::VectorXd x0, Eigen::VectorXd coeffs, double v_ref, vector<double> &x_trajectory, vector<double> &y_trajectory, bool &status) {
   size_t i;
   typedef CPPAD_TESTVECTOR(double) Dvector;
 
@@ -230,7 +234,7 @@ vector<double> MPC::Solve(Eigen::VectorXd x0, Eigen::VectorXd coeffs, vector<dou
   constraints_upperbound[epsi_start] = epsi;
 
   // object that computes objective and constraints
-  FG_eval fg_eval(coeffs);
+  FG_eval fg_eval(coeffs, v_ref);
 
   // options for IPOPT solver
   std::string options;

@@ -137,7 +137,7 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws,
 //          }
           psi = psi_new;
 //          v = v + prev_throttle * 5.0 * latency;
-          cout << px << " " << py << " " << psi << " " << v << endl;
+//          cout << px << " " << py << " " << psi << " " << v << endl;
         }
 
         // convert waypoints to car coordinates
@@ -155,7 +155,7 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws,
         }
 
         // fit polynomial
-        int order = 3;
+        int order = 2;
         Eigen::VectorXd coeff = polyfit(ptsx_car, ptsy_car, order);
 
         /*
@@ -168,7 +168,7 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws,
         x0[0] = 0.0; // x, in unity units which look like meters
         x0[1] = 0.0; // y, meters
         x0[2] = 0.0; // psi, radians -- car points along x axis
-        x0[3] = v*1609/3600; // speed, m/s. 1mph=1609m/3600s
+        x0[3] = v*1609./3600.; // speed, m/s. 1mph=1609m/3600s
         x0[4] = polyeval(coeff, 0.0); // cross track error, meters. is simply y(0.0) as car is in the center of coordinates
         x0[5] = -atan(coeff[1]); // heading error, radians. this is simply angle of f(x) wrt x axis at zero. arctan(f'(0)). f=ax^3+bx^2+cx+d. f'(0)=c
         // assume throttle of 1 is 5m/s2 acceleration
@@ -181,7 +181,21 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws,
         vector<double> mpc_y_vals;
 
         bool status = false;
-        vector<double> solution = mpc.Solve(x0, coeff, mpc_x_vals, mpc_y_vals, status);
+
+        double curvature = (fabs(coeff[2]) > 0.0001) ? pow(1.0+pow(coeff[1], 2), 1.5) / fabs(2.*coeff[2]) : 10000. ;
+        double v_ref = 100; // in mph. MPC will convert to m/s2
+        if (v < 10.)
+          v_ref = 100;
+        else
+          if (curvature < 200)
+            v_ref = 80;
+          else if (curvature < 100)
+            v_ref = 60;
+          else if (curvature < 50)
+            v_ref = 30;
+        cout << "curvature: " << curvature << " v: " << v << " ref_v: " << v_ref << endl;
+
+        vector<double> solution = mpc.Solve(x0, coeff, v_ref, mpc_x_vals, mpc_y_vals, status);
 
         cout << calc_hrt.GetElapsedSecs() << " secs calculation "<< endl;
 
