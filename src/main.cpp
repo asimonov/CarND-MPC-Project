@@ -188,7 +188,7 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws,
           v_ref = 150;
         else
           if (curvature < 70)
-            v_ref = 85;
+            v_ref = 91;
 //          else if (curvature < 80)
 //            v_ref = 80;
 //          else if (curvature < 100)

@@ -10,7 +10,7 @@ namespace plt = matplotlibcpp;
 
 
 // TODO: Set the timestep length and duration
-size_t N = 12;
+size_t N = 16;
 double dt = 0.1;
 
 // This value assumes the model presented in the classroom is used.
@@ -63,7 +63,7 @@ class FG_eval {
       // Any additions to the cost should be added to `fg[0]`.
       fg[0] = 0;
 
-      AD<double> cte_factor = 1.5;
+      AD<double> cte_factor = 2.5;
       AD<double> speed_factor = 1;
       // The part of the cost based on the reference state.
       for (int i = 0; i < N; i++) {
@@ -72,7 +72,7 @@ class FG_eval {
         fg[0] += speed_factor * CppAD::pow(vars[v_start + i] - ref_v, 2);
       }
 
-      double steering_angle_dampen_factor = 10000;
+      double steering_angle_dampen_factor = 40000;
       // Minimize the use of actuators.
       for (int i = 0; i < N - 1; i++) {
         fg[0] += steering_angle_dampen_factor * CppAD::pow(vars[delta_start + i], 2);
@@ -293,5 +293,8 @@ vector<double> MPC::Solve(Eigen::VectorXd x0, Eigen::VectorXd coeffs, double v_r
 //          solution.x[psi_start + 1], solution.x[v_start + 1],
 //          solution.x[cte_start + 1], solution.x[epsi_start + 1],
 //          solution.x[delta_start],   solution.x[a_start]};
-  return {solution.x[delta_start],   solution.x[a_start]};
+
+//  return {(solution.x[delta_start] + solution.x[delta_start+1] + solution.x[delta_start+2])/3.,   (solution.x[a_start]+solution.x[a_start+1]+solution.x[a_start+2])/3.};
+  return {(solution.x[delta_start] + solution.x[delta_start+1])/2.,   (solution.x[a_start]+solution.x[a_start+1])/2.};
+//  return {solution.x[delta_start],   solution.x[a_start]};
 }
