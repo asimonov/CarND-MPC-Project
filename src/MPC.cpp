@@ -72,7 +72,7 @@ class FG_eval {
         fg[0] += speed_factor * CppAD::pow(vars[v_start + i] - ref_v, 2);
       }
 
-      double steering_angle_dampen_factor = 40000;
+      double steering_angle_dampen_factor = 20000;
       // Minimize the use of actuators.
       for (int i = 0; i < N - 1; i++) {
         fg[0] += steering_angle_dampen_factor * CppAD::pow(vars[delta_start + i], 2);

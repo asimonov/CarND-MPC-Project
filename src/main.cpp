@@ -68,7 +68,6 @@ Eigen::VectorXd polyfit(Eigen::VectorXd xvals, Eigen::VectorXd yvals,
   return result;
 }
 
-using namespace std::placeholders; // for _1, _2 etc
 
 
 static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws,
@@ -184,17 +183,17 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws,
 
         double curvature = (fabs(coeff[2]) > 0.0001) ? pow(1.0+pow(coeff[1], 2), 1.5) / fabs(2.*coeff[2]) : 10000. ;
         double v_ref = 100; // in mph. MPC will convert to m/s2
-        if (v < 40.)
+        if (v < 60.)
           v_ref = 150;
         else
           if (curvature < 70)
-            v_ref = 91;
+            v_ref = 65;
 //          else if (curvature < 80)
 //            v_ref = 80;
 //          else if (curvature < 100)
 //            v_ref = 100;
           else
-            v_ref = 150;
+            v_ref = 95;
         cout << "curvature: " << curvature << " v: " << v << " ref_v: " << v_ref << endl;
 
         vector<double> solution = mpc.Solve(x0, coeff, v_ref, mpc_x_vals, mpc_y_vals, status);
@@ -212,39 +211,31 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws,
         json msgJson;
         msgJson["steering_angle"] = steer_value;
         msgJson["throttle"] = throttle_value;
-
-        //.. add (x,y) points to list here, points are in reference to the vehicle's coordinate system
-        // the points in the simulator are connected by a Green line
+        // (x,y) array of predicted MPC path.
+        // in reference to the vehicle's coordinate system (x straight forward, y to the left).
+        // shown by a Green line
         msgJson["mpc_x"] = mpc_x_vals;
         msgJson["mpc_y"] = mpc_y_vals;
-
-        //.. add (x,y) points to list here, points are in reference to the vehicle's coordinate system
-        // the points in the simulator are connected by a Yellow line
+        // (x,y) array to show waypoints.
+        // in reference to the vehicle's coordinate system (x straight forward, y to the left).
+        // shown by a Yellow line
         msgJson["next_x"] = v_ptsx_car;
         msgJson["next_y"] = v_ptsy_car;
-
         auto msg = "42[\"steer\"," + msgJson.dump() + "]";
+
 //        std::cout << msg << std::endl;
 
-        prev_steering_angle = steer_value;
-        prev_throttle = throttle_value;
-
-        // Latency
-        // The purpose is to mimic real driving conditions where
-        // the car does actuate the commands instantly.
-        //
-        // Feel free to play around with this value but should be to drive
-        // around the track with 100ms latency.
-        //
-        // NOTE: REMEMBER TO SET THIS TO 100 MILLISECONDS BEFORE
-        // SUBMITTING.
+        // Latency to mimic real driving conditions where
+        // the car does NOT actuate the commands instantly.
         HiResTimer sleep_hrt;
-
         this_thread::sleep_for(chrono::milliseconds(100));
-
         cout << sleep_hrt.GetElapsedSecs() << " secs slept\n";
+
         cout << "OUT: " << hrt.GetElapsedSecs() << " st="<<steer_value<<" thrt="<<throttle_value  << endl;
 
+        // remember for next telemetery event
+        prev_steering_angle = steer_value;
+        prev_throttle = throttle_value;
         prev_telemetery_hrt.Reset(); // start measuring time from last telemetery
 
         ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
@@ -258,13 +249,16 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws,
 }
 
 
+using namespace std::placeholders; // for _1, _2 etc for binding
+
 int main() {
   uWS::Hub h;
 
   MPC mpc; // Model Predictive Controller
   HiResTimer hrt; // High Resolution Timer to measure latencies
-
+  // this is the main telemetery handler that sends controls back to the simulator
   h.onMessage(std::bind(MessageHandler, _1, _2, _3, _4, mpc, hrt));
+
 
   // We don't need this since we're not using HTTP but if it's removed the program doesn't compile :-(
   h.onHttpRequest([](uWS::HttpResponse *res, uWS::HttpRequest req, char *data,
