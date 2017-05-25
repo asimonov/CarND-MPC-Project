@@ -20,18 +20,55 @@ latency in actuation:
 
 ## Timestep Length and Frequency
 
-Student discusses the reasoning behind the chosen N (timestep length) and dt (timestep frequency) values. Additionally the student details the previous values tried.
+After playing with various settings we have settled on N=16 and delta_t=100 milliseconds.
+This projects car trajectory out for 1.6 seconds and at speeds around 80-100 mph covers
+just the right distance around the corners to incorporate enough information from the future
+into our current controls.
+
+We have tried smaller N. It speeds up the calculation and results in less errors but the performance
+is not as good, in terms of stability at higher speeds. With the current settings the solver
+find solution almost always and is limited to 20 milliseconds to do this.
+
+We take average of two first calculated actuations and use them to steer the car until the
+next measurement. Then we repeat the process from new position/state.
+
+
 
 ## Polynomial Fitting and MPC Preprocessing
 
-A polynomial is fitted to waypoints.
+As mentioned before we fit a quadratic polynomial to provided waypoints.
+It works nicely. We also calculate curvature of the curve at the point where the car is
+to adjust our reference speed. When curvature is less than 70 meters we reduce the reference
+speed to 65mph. Otherwise we try to achieve 95mph. This results in car braking into the tight corners
+and accelerating out of the corners.
 
-If the student preprocesses waypoints, the vehicle state, and/or actuators prior to the MPC procedure it is described.
+We do not preprocesses waypoints, the vehicle state, and/or actuators 
+in any way prior to the MPC procedure.
+
+
 
 ## Model Predictive Control with Latency
 
-The student implements Model Predictive Control that handles a 100 millisecond latency. Student provides details on how they deal with latency.
+We use hard-enforced latency of 100 milliseconds before sending the controls to the car,
+mimicking the real world.
+To achieve this `this_thread::sleep_for` function from C++ standard library is used.
+We also verify this by utilising `chrono::high_resolution_clock` to measure all the calculations/latencies.
 
+Empirically we see that calculations take 20ms, sleep_for takes 105ms and the latency between
+sending controls and receiving next telemetry message is 19ms, on average.
+
+To deal with latency gracefully we take the original state from telemetery measurement and
+apply our motion equations to estimate x,y and heading after 120ms in the future. This is
+the initial state we solve our optimization problem from.
+
+This results in very good approximation for speeds up to 100 mph. How do we know this?
+This is visually obvious
+as we pass the ideal trajectory into simulator to be drawn in front of the car as yellow line.
+Our input waypoints are given in global coordinates. 
+But for visualization we pass them into the simulator in the car coordinates. 
+So they have to be adjusted by the position of the car at the time the simulator draws them.
+And that is after the latency we enforce.
+So what we see in our implementation is the yellow line is very stable and in the middle of the road. 
 
 
 
