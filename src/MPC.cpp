@@ -2,28 +2,18 @@
 #include <cppad/cppad.hpp>
 #include <cppad/ipopt/solve.hpp>
 #include "Eigen-3.3/Eigen/Core"
-#include "matplotlibcpp.h"
+//#include "matplotlibcpp.h"
+//namespace plt = matplotlibcpp;
 
 using CppAD::AD;
 
-namespace plt = matplotlibcpp;
 
 
-// TODO: Set the timestep length and duration
-size_t N = 16;
-double dt = 0.1;
+// The timesteps and their duration that MPC uses to project into the future when
+// finding optimal controls.
+const size_t N = 16;
+const double dt = 0.1;
 
-// This value assumes the model presented in the classroom is used.
-//
-// It was obtained by measuring the radius formed by running the vehicle in the
-// simulator around in a circle with a constant steering angle and velocity on a
-// flat terrain.
-//
-// Lf was tuned until the the radius formed by the simulating the model
-// presented in the classroom matched the previous radius.
-//
-// This is the length from front to CoG that has a similar radius.
-const double Lf = 2.67;
 
 
 // The solver takes all the state variables and actuator
@@ -41,17 +31,20 @@ size_t a_start = delta_start + N - 1;
 
 
 class FG_eval {
-// Both the reference cross track and orientation errors are 0.
-    double ref_cte = 0;
-    double ref_epsi = 0;
-    // Fitted polynomial coefficients
-    Eigen::VectorXd coeffs;
-    // The reference velocity in m/s
-    double ref_v = 25;
+    const double ref_cte = 0; // ideal cross-track error
+    const double ref_epsi = 0; // ideal heading error
+    Eigen::VectorXd coeffs; // Fitted polynomial coefficients for ideal trajectory
+    double ref_v = 25; // The reference velocity in m/s.
+    double Lf; // the vehicle parameter, distance from center of gravity to front steering wheels
+
+    const double cte_factor = 2.5; // cost factor. the higher this factor the more aggressively we try to return to the trajectory
+    const double steering_angle_dampen_factor = 20000; // cost factor. the higher this factor the more stable our steering is
+
  public:
-  FG_eval(Eigen::VectorXd coeffs, double v_ref) {
+  FG_eval(Eigen::VectorXd coeffs, double v_ref, double Lf) {
     this->coeffs = coeffs;
-    this->ref_v = v_ref * (1609./3600.);
+    this->ref_v = v_ref * (1609./3600.); // convert to m/s from mph
+    this->Lf = Lf;
   }
 
   typedef CPPAD_TESTVECTOR(AD<double>) ADvector;
@@ -63,33 +56,30 @@ class FG_eval {
       // Any additions to the cost should be added to `fg[0]`.
       fg[0] = 0;
 
-      AD<double> cte_factor = 2.5;
-      AD<double> speed_factor = 1;
+
       // The part of the cost based on the reference state.
       for (int i = 0; i < N; i++) {
         fg[0] += cte_factor * CppAD::pow(vars[cte_start + i] - ref_cte, 2);
         fg[0] += CppAD::pow(vars[epsi_start + i] - ref_epsi, 2);
-        fg[0] += speed_factor * CppAD::pow(vars[v_start + i] - ref_v, 2);
+        fg[0] += CppAD::pow(vars[v_start + i] - ref_v, 2);
       }
 
-      double steering_angle_dampen_factor = 20000;
+
       // Minimize the use of actuators.
       for (int i = 0; i < N - 1; i++) {
         fg[0] += steering_angle_dampen_factor * CppAD::pow(vars[delta_start + i], 2);
         fg[0] += CppAD::pow(vars[a_start + i], 2);
       }
 
-      double steering_step_dampen_factor = 1;
       // Minimize the value gap between sequential actuations.
       for (int i = 0; i < N - 2; i++) {
-        fg[0] += steering_step_dampen_factor * CppAD::pow(vars[delta_start + i + 1] - vars[delta_start + i], 2);
+        fg[0] += CppAD::pow(vars[delta_start + i + 1] - vars[delta_start + i], 2);
         fg[0] += CppAD::pow(vars[a_start + i + 1] - vars[a_start + i], 2);
       }
 
       //
-      // Setup Constraints
+      // Optimization Constraints
       //
-      // NOTE: In this section you'll setup the model constraints.
 
       // Initial constraints
       //
@@ -125,14 +115,24 @@ class FG_eval {
         AD<double> delta0 = vars[delta_start + i];
         AD<double> a0 = vars[a_start + i];
 
-        //AD<double> f0 = coeffs[0] + x0 * (coeffs[1] + x0 * (coeffs[2] + x0 * coeffs[3]));
-        //AD<double> psides0 = CppAD::atan(coeffs[1] + x0 * (2 * coeffs[2] + x0 * 3 * coeffs[3]));
-        AD<double> f0 = coeffs[0] + x0 * (coeffs[1] + x0 * (coeffs[2] ));
-        AD<double> psides0 = CppAD::atan(coeffs[1] + x0 * (2 * coeffs[2] ));
+        // find position on trajectory where we should be and ideal heading, based on polynomial path
+        AD<double> f0 = 0.0;
+        AD<double> psides0 = 0.0;
+        if (coeffs.size() == 4) {
+          // cubic polynomial
+          f0 = coeffs[0] + x0 * (coeffs[1] + x0 * (coeffs[2] + x0 * coeffs[3]));
+          psides0 = CppAD::atan(coeffs[1] + x0 * (2 * coeffs[2] + x0 * 3 * coeffs[3]));
+        } else {
+          // quadratic polynomial
+          f0 = coeffs[0] + x0 * (coeffs[1] + x0 * (coeffs[2] ));
+          psides0 = CppAD::atan(coeffs[1] + x0 * (2 * coeffs[2] ));
+        }
 
-        // The idea here is to constraint this value to be 0.
+        // Constraints. Implied by our motion model.
+        // Forces the predicted motion path to be close to the polynomial.
+        // IPOPT assumes we are driving constraints to zero.
         //
-        // Recall the equations for the model:
+        // The equations for the model:
         // x_[t+1] = x[t] + v[t] * cos(psi[t]) * dt
         // y_[t+1] = y[t] + v[t] * sin(psi[t]) * dt
         // psi_[t+1] = psi[t] + v[t] / Lf * delta[t] * dt
@@ -141,10 +141,10 @@ class FG_eval {
         // epsi[t+1] = psi[t] - psides[t] + v[t] * delta[t] / Lf * dt
         fg[2 + x_start + i]    = x1    - (x0 + v0 * CppAD::cos(psi0) * dt);
         fg[2 + y_start + i]    = y1    - (y0 + v0 * CppAD::sin(psi0) * dt);
-        fg[2 + psi_start + i]  = psi1  - (psi0 - v0 * delta0 / Lf * dt); // plus here as suspect delta is positive to turn left
+        fg[2 + psi_start + i]  = psi1  - (psi0 - v0 * delta0 / Lf * dt); // simulator steering angle/delta is positive to turn left
         fg[2 + v_start + i]    = v1    - (v0 + a0 * dt);
         fg[2 + cte_start + i]  = cte1  - ((f0 - y0) + (v0 * CppAD::sin(epsi0) * dt));
-        fg[2 + epsi_start + i] = epsi1 - (psi0 - psides0 - v0 * delta0 / Lf * dt); // again plus as delta is different sign
+        fg[2 + epsi_start + i] = epsi1 - (psi0 - psides0 - v0 * delta0 / Lf * dt); // again delta is different sign from motion equations
       }
   }
 };
@@ -156,7 +156,7 @@ MPC::MPC() {}
 MPC::~MPC() {}
 
 vector<double> MPC::Solve(Eigen::VectorXd x0, Eigen::VectorXd coeffs, double v_ref, vector<double> &x_trajectory, vector<double> &y_trajectory, bool &status) {
-  size_t i;
+
   typedef CPPAD_TESTVECTOR(double) Dvector;
 
   // number of independent variables
@@ -190,7 +190,7 @@ vector<double> MPC::Solve(Eigen::VectorXd x0, Eigen::VectorXd coeffs, double v_r
   Dvector vars_lowerbound(n_vars);
   Dvector vars_upperbound(n_vars);
 
-  // Set all non-actuators upper and lowerlimits
+  // Set all non-actuators upper and lower limits
   // to the max negative and positive values.
   for (int i = 0; i < delta_start; i++) {
     vars_lowerbound[i] = -1.0e19;
@@ -202,11 +202,10 @@ vector<double> MPC::Solve(Eigen::VectorXd x0, Eigen::VectorXd coeffs, double v_r
     vars_lowerbound[i] = -25 * M_PI / 180; // deg2rad(-25)
     vars_upperbound[i] =  25 * M_PI / 180;
   }
-
   // Acceleration/decceleration upper and lower limits.
-  // NOTE: Feel free to change this to something else.
+  // Assume throttle of 1 in the simulator is about 5 m/s2 acceleration. Based on data.
   for (int i = a_start; i < n_vars; i++) {
-    vars_lowerbound[i] = -5.0; // assume throttle of 1 is 5 m/s2 acceleration
+    vars_lowerbound[i] = -5.0;
     vars_upperbound[i] =  5.0;
   }
 
@@ -234,12 +233,11 @@ vector<double> MPC::Solve(Eigen::VectorXd x0, Eigen::VectorXd coeffs, double v_r
   constraints_upperbound[epsi_start] = epsi;
 
   // object that computes objective and constraints
-  FG_eval fg_eval(coeffs, v_ref);
+  FG_eval fg_eval(coeffs, v_ref, Lf);
 
   // options for IPOPT solver
   std::string options;
-  // Uncomment this if you'd like more print information
-  options += "Integer print_level  0\n";
+  options += "Integer print_level  0\n"; // debug print level
   // NOTE: Setting sparse to true allows the solver to take advantage
   // of sparse routines, this makes the computation MUCH FASTER. If you
   // can uncomment 1 of these and see if it makes a difference or not but
@@ -247,54 +245,40 @@ vector<double> MPC::Solve(Eigen::VectorXd x0, Eigen::VectorXd coeffs, double v_r
   // magnitude.
   options += "Sparse  true        forward\n";
   options += "Sparse  true        reverse\n";
-  // NOTE: Currently the solver has a maximum time limit of 0.5 seconds.
-  // Change this as you see fit.
+  // Set the solver maximum time limit of 50 milliseconds.
   options += "Numeric max_cpu_time          0.05\n";
 
   // place to return solution
   CppAD::ipopt::solve_result<Dvector> solution;
 
-  // solve the problem
-  CppAD::ipopt::solve<Dvector, FG_eval>(
-      options, vars, vars_lowerbound, vars_upperbound, constraints_lowerbound,
-      constraints_upperbound, fg_eval, solution);
+  // solve the optimization problem
+  CppAD::ipopt::solve<Dvector, FG_eval>(options,
+                                        vars,
+                                        vars_lowerbound, vars_upperbound,
+                                        constraints_lowerbound, constraints_upperbound,
+                                        fg_eval,
+                                        solution);
 
-  // Check some of the solution values
+  // Put solution status into input 'status' variable, to be checked outside.
   status = (solution.status == CppAD::ipopt::solve_result<Dvector>::success);
-
   if (!status)
     std::cout << "FAIL" << std::endl;
-  //assert(ok);
 
   // Cost
   auto cost = solution.obj_value;
 //  std::cout << "Cost " << cost << std::endl;
 
+  // pass projected trajectory outside
   x_trajectory.resize(N);
   y_trajectory.resize(N);
-
   for (int i=0; i<N; i++)
   {
     x_trajectory[i] = solution.x[x_start + i];
     y_trajectory[i] = solution.x[y_start + i];
   }
 
-
-
-
-
-
-  // TODO: Return the first actuator values. The variables can be accessed with
-  // `solution.x[i]`.
+  // Return the first actuator values. Taking average of first two, to smooth the trajectory
   //
-  // {...} is shorthand for creating a vector, so auto x1 = {1.0,2.0}
-  // creates a 2 element double vector.
-//  return {solution.x[x_start + 1],   solution.x[y_start + 1],
-//          solution.x[psi_start + 1], solution.x[v_start + 1],
-//          solution.x[cte_start + 1], solution.x[epsi_start + 1],
-//          solution.x[delta_start],   solution.x[a_start]};
-
-//  return {(solution.x[delta_start] + solution.x[delta_start+1] + solution.x[delta_start+2])/3.,   (solution.x[a_start]+solution.x[a_start+1]+solution.x[a_start+2])/3.};
-  return {(solution.x[delta_start] + solution.x[delta_start+1])/2.,   (solution.x[a_start]+solution.x[a_start+1])/2.};
-//  return {solution.x[delta_start],   solution.x[a_start]};
+  return {(solution.x[delta_start] + solution.x[delta_start+1]) / 2.,
+          (solution.x[a_start]     + solution.x[a_start+1])     / 2.};
 }

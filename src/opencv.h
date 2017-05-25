@@ -5,4 +5,6 @@
 #ifndef MPC_OPENCV_H
 #define MPC_OPENCV_H
 
+int test();
+
 #endif //MPC_OPENCV_H

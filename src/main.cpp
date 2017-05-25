@@ -1,6 +1,5 @@
 #include <math.h>
 #include <uWS/uWS.h>
-#include <chrono>
 #include <iostream>
 #include <thread>
 #include <vector>
@@ -50,11 +49,12 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws,
   // The 2 signifies a websocket event
   string sdata = string(data).substr(0, length);
 
+  // timer to persist between calls, hence static. this one measures interval between telemetery events.
   static HiResTimer prev_telemetery_hrt;
 
+  // remember previous steering angle and throttle. persisted between the calls, hence static
   static double prev_steering_angle = 0.0;
   static double prev_throttle = 0.0;
-  const double default_latency = 0.1;
 
 //  cout << sdata << endl;
   if (sdata.size() > 2 && sdata[0] == '4' && sdata[1] == '2') {
@@ -72,31 +72,29 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws,
         double psi = j[1]["psi"];
         double v = j[1]["speed"];
 
-        cout << prev_telemetery_hrt.GetElapsedSecs() << " secs latency since controls sent "<< endl;
+        cout << prev_telemetery_hrt.GetElapsedSecs() << " secs latency since last telemetry "<< endl;
         cout << "IN: " << hrt.GetElapsedSecs() << " px="<<px<<" py="<<py<<" v="<<v<<" psi="<<psi << endl;
 
-        HiResTimer calc_hrt;
+        HiResTimer calc_hrt; // calculation timer
 
-        // adjust start state for latency
-        double latency = 0.12 ;
-        bool adjust_for_latency = true;
-        const double Lf = 2.67;
-        const double v_conv = v * (1609. / 3600.);
+        // adjust start state for latency.
+        // assume that our actuation will not be applied until after 'latency' time has passed.
+        // so base our calculation on state projected by 'latency' into the future.
+        const double latency = 0.12 ; // using constant latency here, instead of relying on past measurement. assuming 120 msec.
+        const bool   adjust_for_latency = true;
+        const double speed_conversion_factor = (1609. / 3600.); // convert speed to m/s as these are the units our model assumes.
+        const double v_conv = v * speed_conversion_factor;
 
-        if (adjust_for_latency and fabs(prev_steering_angle) < 0.0001) { // lame approximation
+        if (adjust_for_latency) {
+          // approximation. does not take into account that psi and velocity change over this period.
+          // but good enough for what we are doing here.
           px = px + v_conv * cos(psi) * latency;
           py = py + v_conv * sin(psi) * latency;
-          psi = psi - v_conv * deg2rad(prev_steering_angle * 25.) / Lf * latency;
-        }
-        else if (adjust_for_latency and v>0.0001) { // bicycle model equations from EKF lectures
-          double psidot = - v_conv * deg2rad(prev_steering_angle * 25.) / Lf;
-          double psi_new = psi + psidot * latency;
-          px = px + (v_conv / psidot) * ( sin(psi_new) - sin(psi));// + 0.5 * latency * latency * cos(psi) * prev_throttle * 5.0;
-          py = py + (v_conv / psidot) * (-cos(psi_new) + cos(psi));// + 0.5 * latency * latency * sin(psi) * prev_throttle * 5.0;
-          psi = psi_new;
+          psi = psi - v_conv * deg2rad(prev_steering_angle * 25.) / mpc.Lf * latency;
         }
 
         // convert waypoints to car coordinates
+        // store both as vector and VectorXd as they are not easily convertible.
         Eigen::VectorXd ptsx_car(ptsx.size());
         Eigen::VectorXd ptsy_car(ptsy.size());
         vector<double> v_ptsx_car(ptsx.size());
@@ -110,7 +108,7 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws,
           v_ptsy_car[i] = ptsy_car[i];
         }
 
-        // fit polynomial
+        // fit polynomial to waypoints
         int order = 2;
         Eigen::VectorXd coeff = polyfit(ptsx_car, ptsy_car, order);
 
@@ -122,8 +120,8 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws,
         x0[0] = 0.0; // x, in unity units which look like meters
         x0[1] = 0.0; // y, meters
         x0[2] = 0.0; // psi, radians -- car points along x axis
-        x0[3] = v*1609./3600.; // speed, m/s. 1mph=1609m/3600s
-        x0[4] = polyeval(coeff, 0.0); // cross track error, meters. is simply y(0.0) as car is in the center of coordinates
+        x0[3] = v * speed_conversion_factor; // speed, m/s. 1mph=1609m/3600s
+        x0[4] = polyeval(coeff, 0.0); // cross track error, meters. is simply f(0.0) as car is in the center of coordinates
         x0[5] = -atan(coeff[1]); // heading error, radians. this is simply angle of f(x) wrt x axis at zero. arctan(f'(0)). f=ax^3+bx^2+cx+d. f'(0)=c
         // assume throttle of 1 is 5m/s2 acceleration
 
@@ -132,7 +130,7 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws,
         double steer_value = -0.02;
         double throttle_value = 0.1;
 
-        //Display the MPC predicted trajectory
+        // placeholders for the MPC predicted trajectory
         vector<double> mpc_x_vals;
         vector<double> mpc_y_vals;
 
@@ -143,11 +141,14 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws,
         double curvature = (fabs(coeff[2]) > 0.0001) ? pow(1.0+pow(coeff[1], 2), 1.5) / fabs(2.*coeff[2]) : 10000. ;
         double v_ref = 100; // in mph. MPC will convert to m/s2
         if (v < 60.)
+          // if we are below 60mph speed up. for example at the start.
           v_ref = 150;
         else
           if (curvature < 70)
+            // if we are going into a tight turn, slow down
             v_ref = 65;
           else
+            // if road is straight, accelerate!
             v_ref = 95;
         cout << "curvature: " << curvature << " v: " << v << " ref_v: " << v_ref << endl;
 
@@ -157,11 +158,12 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws,
         cout << calc_hrt.GetElapsedSecs() << " secs calculation "<< endl;
 
         if (status) {
+          // is solver succeeded, use the found solution
           steer_value = solution[0] / deg2rad(25); // already in radians
-          throttle_value = solution[1] / 5.0;
+          throttle_value = solution[1] / 5.0; // scale back to between -1..1
         } else {
           // if solver failed, keep the values calculated before.
-          // hopefully it is an add failure and next event will be handled correctly
+          // hopefully it is an odd failure and next event will be handled correctly
           steer_value = prev_steering_angle;
           throttle_value = prev_throttle;
         }
