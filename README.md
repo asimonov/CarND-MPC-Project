@@ -1,5 +1,15 @@
 # Model Predictive Controller
-Self-Driving Car Engineer Nanodegree Program
+Final project in Term 2 of Udacity Self-Driving Car Engineer Nanodegree Program.
+
+Using kinematic model of car motion to find optimal controls to steer a car around
+the track. The car receives telemetery events from simulator, which include car position,
+velocity and heading, as well as waypoints for the path to follow. The controller finds
+optimal steering angle and throttle and sends it back to the simulator to actuate
+the car. Background can be found on [wikipedia](https://en.wikipedia.org/wiki/Model_predictive_control)
+
+Here is a video of the final implementation pushed to its limits, given 100 millisecond
+latency in actuation:
+[![Screenshot of simulator](./screenshot.png)](https://youtu.be/9XsCqnCliQU)
 
 ---
 
