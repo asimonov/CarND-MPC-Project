@@ -6,11 +6,11 @@
 #include <vector>
 #include <functional>
 #include <ctime>
-#include "Eigen-3.3/Eigen/Core"
-#include "Eigen-3.3/Eigen/QR"
 #include "MPC.h"
 #include "json.hpp"
 #include "HiResTimer.h"
+#include "poly.h"
+//#include "opencv.h"
 
 // for convenience
 using json = nlohmann::json;
@@ -35,38 +35,6 @@ string hasData(string s) {
   return "";
 }
 
-// Evaluate a polynomial.
-double polyeval(Eigen::VectorXd coeffs, double x) {
-  double result = 0.0;
-  for (int i = 0; i < coeffs.size(); i++) {
-    result += coeffs[i] * pow(x, i);
-  }
-  return result;
-}
-
-// Fit a polynomial.
-// Adapted from
-// https://github.com/JuliaMath/Polynomials.jl/blob/master/src/Polynomials.jl#L676-L716
-Eigen::VectorXd polyfit(Eigen::VectorXd xvals, Eigen::VectorXd yvals,
-                        int order) {
-  assert(xvals.size() == yvals.size());
-  assert(order >= 1 && order <= xvals.size() - 1);
-  Eigen::MatrixXd A(xvals.size(), order + 1);
-
-  for (int i = 0; i < xvals.size(); i++) {
-    A(i, 0) = 1.0;
-  }
-
-  for (int j = 0; j < xvals.size(); j++) {
-    for (int i = 0; i < order; i++) {
-      A(j, i + 1) = A(j, i) * xvals(j);
-    }
-  }
-
-  auto Q = A.householderQr();
-  auto result = Q.solve(yvals);
-  return result;
-}
 
 
 
@@ -118,25 +86,14 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws,
         if (adjust_for_latency and fabs(prev_steering_angle) < 0.0001) { // lame approximation
           px = px + v_conv * cos(psi) * latency;
           py = py + v_conv * sin(psi) * latency;
-//          for (int i = 0; i < ptsx.size(); i++) {
-//            ptsx[i] = ptsx[i] + v * (1609. / 3600.) * cos(psi) * latency;
-//            ptsy[i] = ptsy[i] + v * (1609. / 3600.) * sin(psi) * latency;
-//          }
           psi = psi - v_conv * deg2rad(prev_steering_angle * 25.) / Lf * latency;
-          //v = v + prev_throttle * 5.0 * latency;
         }
         else if (adjust_for_latency and v>0.0001) { // bicycle model equations from EKF lectures
           double psidot = - v_conv * deg2rad(prev_steering_angle * 25.) / Lf;
           double psi_new = psi + psidot * latency;
           px = px + (v_conv / psidot) * ( sin(psi_new) - sin(psi));// + 0.5 * latency * latency * cos(psi) * prev_throttle * 5.0;
           py = py + (v_conv / psidot) * (-cos(psi_new) + cos(psi));// + 0.5 * latency * latency * sin(psi) * prev_throttle * 5.0;
-//          for (int i = 0; i < ptsx.size(); i++) {
-//            ptsx[i] = ptsx[i] + (v / psidot) * conv_factor * (sin(psi + psidot * latency) - sin(psi)) + 0.5 * latency * latency * cos(psi) * prev_throttle * 5.0;
-//            ptsy[i] = ptsy[i] + (v / psidot) * conv_factor * (-cos(psi + psidot * latency) + cos(psi)) + 0.5 * latency * latency * sin(psi) * prev_throttle * 5.0;
-//          }
           psi = psi_new;
-//          v = v + prev_throttle * 5.0 * latency;
-//          cout << px << " " << py << " " << psi << " " << v << endl;
         }
 
         // convert waypoints to car coordinates
@@ -158,10 +115,8 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws,
         Eigen::VectorXd coeff = polyfit(ptsx_car, ptsy_car, order);
 
         /*
-        * TODO: Calculate steeering angle and throttle using MPC.
-        *
+        * Calculate steeering angle and throttle using MPC.
         * Both are in between [-1, 1].
-        *
         */
         Eigen::VectorXd x0(6);
         x0[0] = 0.0; // x, in unity units which look like meters
@@ -172,6 +127,8 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws,
         x0[5] = -atan(coeff[1]); // heading error, radians. this is simply angle of f(x) wrt x axis at zero. arctan(f'(0)). f=ax^3+bx^2+cx+d. f'(0)=c
         // assume throttle of 1 is 5m/s2 acceleration
 
+        // default values are for when we have no MPC implemented and just need the car to drive as far as possible to then
+        // backwards engineer kinematic model equations/units of measurement
         double steer_value = -0.02;
         double throttle_value = 0.1;
 
@@ -181,6 +138,8 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws,
 
         bool status = false;
 
+        // find curvature of the fitted polynomial at the point where car is.
+        // set reference speed depending on the curvature ahead
         double curvature = (fabs(coeff[2]) > 0.0001) ? pow(1.0+pow(coeff[1], 2), 1.5) / fabs(2.*coeff[2]) : 10000. ;
         double v_ref = 100; // in mph. MPC will convert to m/s2
         if (v < 60.)
@@ -188,14 +147,11 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws,
         else
           if (curvature < 70)
             v_ref = 65;
-//          else if (curvature < 80)
-//            v_ref = 80;
-//          else if (curvature < 100)
-//            v_ref = 100;
           else
             v_ref = 95;
         cout << "curvature: " << curvature << " v: " << v << " ref_v: " << v_ref << endl;
 
+        // solve MPC problem
         vector<double> solution = mpc.Solve(x0, coeff, v_ref, mpc_x_vals, mpc_y_vals, status);
 
         cout << calc_hrt.GetElapsedSecs() << " secs calculation "<< endl;
@@ -204,6 +160,8 @@ static void MessageHandler(uWS::WebSocket<uWS::SERVER> ws,
           steer_value = solution[0] / deg2rad(25); // already in radians
           throttle_value = solution[1] / 5.0;
         } else {
+          // if solver failed, keep the values calculated before.
+          // hopefully it is an add failure and next event will be handled correctly
           steer_value = prev_steering_angle;
           throttle_value = prev_throttle;
         }
