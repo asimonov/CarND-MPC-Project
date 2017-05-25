@@ -15,7 +15,8 @@ latency in actuation:
 
 ## The Model
 
-Student describes their model in detail. This includes the state, actuators and update equations.
+![Model equations](./equations.png)
+
 
 ## Timestep Length and Frequency
 
@@ -73,4 +74,9 @@ The student implements Model Predictive Control that handles a 100 millisecond l
 2. Make a build directory: `mkdir build && cd build`
 3. Compile: `cmake .. && make`
 4. Run it: `./mpc`.
+
+## The simulator
+
+Can be found [here](https://github.com/udacity/self-driving-car-sim/releases). Version 1.3+.
+
 

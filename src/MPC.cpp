@@ -141,7 +141,7 @@ class FG_eval {
         // epsi[t+1] = psi[t] - psides[t] + v[t] * delta[t] / Lf * dt
         fg[2 + x_start + i]    = x1    - (x0 + v0 * CppAD::cos(psi0) * dt);
         fg[2 + y_start + i]    = y1    - (y0 + v0 * CppAD::sin(psi0) * dt);
-        fg[2 + psi_start + i]  = psi1  - (psi0 - v0 * delta0 / Lf * dt); // simulator steering angle/delta is positive to turn left
+        fg[2 + psi_start + i]  = psi1  - (psi0 - v0 * delta0 / Lf * dt); // simulator steering angle/delta is positive to turn left, hence minus sign
         fg[2 + v_start + i]    = v1    - (v0 + a0 * dt);
         fg[2 + cte_start + i]  = cte1  - ((f0 - y0) + (v0 * CppAD::sin(epsi0) * dt));
         fg[2 + epsi_start + i] = epsi1 - (psi0 - psides0 - v0 * delta0 / Lf * dt); // again delta is different sign from motion equations
